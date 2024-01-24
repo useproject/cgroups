@@ -33,6 +33,53 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
+func ifInTargetSubSystemList(sub Subsystem, targetSubSystem []Name) bool {
+	for _, v := range targetSubSystem {
+		if sub.Name() == v {
+			return true
+		}
+	}
+	return false
+}
+
+//只创建包含目标控制组的cgroup对象
+func NewWithTargetSubsystems(path Path, resources *specs.LinuxResources, targetSubSystem []Name, opts ...InitOpts) (Cgroup, error) {
+	config := newInitConfig()
+	for _, o := range opts {
+		if err := o(config); err != nil {
+			return nil, err
+		}
+	}
+	subsystems, err := config.hierarchy()
+	if err != nil {
+		return nil, err
+	}
+	var active []Subsystem
+	for _, s := range subsystems {
+		// check if subsystem exists
+		if ifInTargetSubSystemList(s, targetSubSystem) {
+			if err := initializeSubsystem(s, path, resources); err != nil {
+				if err == ErrControllerNotActive {
+					if config.InitCheck != nil {
+						if skerr := config.InitCheck(s, path, err); skerr != nil {
+							if skerr != ErrIgnoreSubsystem {
+								return nil, skerr
+							}
+						}
+					}
+					continue
+				}
+				return nil, err
+			}
+			active = append(active, s)
+		}
+	}
+	return &cgroup{
+		path:       path,
+		subsystems: active,
+	}, nil
+}
+
 // New returns a new control via the cgroup cgroups interface
 func New(path Path, resources *specs.LinuxResources, opts ...InitOpts) (Cgroup, error) {
 	config := newInitConfig()
